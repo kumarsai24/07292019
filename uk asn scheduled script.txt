@@ -1,0 +1,119 @@
+/*
+    Script Name:SCH_Check Ready to Export ASN.js
+    Author:sai chintala
+    Date: 20 April 2018
+    Description:This script will check the checkbox Ready to Export on ASN if all the ASN Line item fields are present.
+*/
+function checkReadyToExport() {
+	var candidates = getAsnCandidates();
+
+	// uses underscore.js
+	var candidatesByAsn = _.groupBy(candidates, function(candidate) {
+		return candidate.getId()
+	});
+
+	for (var asnId in candidatesByAsn) {
+		var asn = candidatesByAsn[asnId];
+		var asnComplete = 'T';
+		for (var i = 0; i < asn.length; ++i) {
+			if (!asn[i].getValue('custrecord_celigo_internal_po', 'custrecord_ws_asn_item_parent') ||
+				!asn[i].getValue('custrecord_celigo_internal_po_line', 'custrecord_ws_asn_item_parent') ||
+				asn[i].getValue('custrecord_celigo_71_receipts_created', 'custrecord_ws_asn_item_parent') != 'T') {
+				asnComplete = 'F';
+				break;
+			}
+		}
+
+		nlapiLogExecution('debug', 'asn results', JSON.stringify({
+			id: asnId,
+			complete: asnComplete
+		}));
+
+		nlapiSubmitField('customrecord_ws_asn', asnId, 'custrecord_asn_ready_to_export', asnComplete);
+	}
+}
+
+function getAsnCandidates(filters, columns) {
+	var searcher = new MassiveSearch();
+	
+	// assumes location parameter is comma-separated list of internal IDs
+	var asnLocations = nlapiGetContext().getSetting('SCRIPT', 'custscript_location').split(',');
+	nlapiLogExecution('debug', 'asnLocations', asnLocations);
+
+	var filters = [];
+	filters.push(new nlobjSearchFilter('custrecord_ws_asn_exported_to_dhl', null, 'is', 'F'));
+	filters.push(new nlobjSearchFilter('custrecord_asn_ready_to_export', null, 'is', 'F'));
+	filters.push(new nlobjSearchFilter('custrecord_ws_asn_location', null, 'anyof', asnLocations));
+
+	var columns = [];
+	columns.push(new nlobjSearchColumn('custrecord_celigo_internal_po', 'custrecord_ws_asn_item_parent'));
+	columns.push(new nlobjSearchColumn('custrecord_celigo_internal_po_line', 'custrecord_ws_asn_item_parent'));
+	columns.push(new nlobjSearchColumn('custrecord_celigo_71_receipts_created', 'custrecord_ws_asn_item_parent'));
+
+	return searcher.search('customrecord_ws_asn', null, filters, columns);
+}
+
+var MassiveSearch = function() {
+	this.searchFactory = function(recordType, savedSearch, filters, columns) {
+		var search;
+		if (savedSearch) {
+			search = nlapiLoadSearch(recordType, savedSearch);
+			if (filters) {
+				if (!(filters instanceof nlobjSearchFilter) &&
+					filters.length > 0 &&
+					!(filters[0] instanceof nlobjSearchFilter)) {
+
+					var filterExpression = search.getFilterExpression();
+					nlapiLogExecution('debug', 'original filter expression', JSON.stringify(filterExpression));
+
+					if (filterExpression) {
+						// work around SuiteScript bug where filterExpression.push gives an out-of-bounds error
+						filterExpression = JSON.parse(JSON.stringify(filterExpression));
+						filterExpression.push('and');
+						filterExpression.push(filters);
+					} else {
+						filterExpression = filters;
+					}
+
+					search.setFilterExpression(filterExpression);
+
+				} else {
+					search.addFilters(filters);
+				}
+			}
+			if (columns) {
+				search.addColumns(columns);
+			}
+		} else {
+			search = nlapiCreateSearch(recordType, filters, columns);
+		}
+		return search;
+	};
+
+	/**
+	 * script points required: 10 per 1000 results
+	 */
+	this.search = function(recordType, savedSearch, filters, columns) {
+		var search = this.searchFactory(recordType, savedSearch, filters, columns);
+		var resultSet = search.runSearch();
+		var results = [];
+		var offset = 0;
+		var allStart = new Date();
+		do {
+			nlapiLogExecution('debug', 'Retrieving results: ', offset + ' - ' + (offset + 1000));
+
+			var pageStart = new Date();
+
+			var page = resultSet.getResults(offset, offset + 1000);
+
+			nlapiLogExecution('debug', 'time to get page', (new Date() - pageStart) / 1000);
+
+			results = results.concat(page);
+
+			offset += 1000;
+		} while (page.length === 1000);
+		nlapiLogExecution('AUDIT', 'Total results: ', results.length);
+		nlapiLogExecution('debug', 'time to complete search', (new Date() - allStart) / 1000);
+		return results;
+	};
+};
