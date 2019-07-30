@@ -1,5 +1,6 @@
 function BeforeSubmitRetailPrice()
-{
+{ 
+    var sai;
 	var po=nlapiNewRecord();
 	var prices = {};
     var location=po.getFieldValue('location');
